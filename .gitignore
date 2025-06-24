@@ -1,0 +1,23 @@
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Ignore virtual environments
+.venv/
+env/
+venv/
+
+# Ignore environment variables and secrets
+.env
+.bot
+
+# Ignore Alembic migrations (optional)
+alembic/
+
+# Ignore database files
+*.sqlite3
+
+# Ignore IDE settings
+.vscode/
+.idea/

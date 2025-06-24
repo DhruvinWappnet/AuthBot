@@ -1,0 +1,9 @@
+* text=auto
+
+# Force Unix-style line endings for all code
+*.py text eol=lf
+*.ini text eol=lf
+*.sh text eol=lf
+
+# Windows batch files can use CRLF
+*.bat text eol=crlf

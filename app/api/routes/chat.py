@@ -1,11 +1,12 @@
 # app/api/routes/chat.py
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel
 from requests import Session
 from app.schemas.chat import MessageCreate
 from app.services.chat_service import save_message
 from app.services.groq_service import get_groq_response
-from app.db.database import get_db  # database session dependency
+from app.db.database import get_db
+from app.services.pdf_service import extract_text_from_pdf,chunk_text,get_top_k_chunks  # database session dependency
 router = APIRouter()
 
 class ChatRequest(BaseModel):
@@ -33,4 +34,18 @@ def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
     )
     save_message(db, bot_msg)
 
+    return {"answer": answer}
+
+# app/api/routes/chat.py
+
+@router.post("/pdf-query")
+async def chat_with_pdf(file: UploadFile = File(...), question: str = ""):
+    content = await file.read()
+    text = extract_text_from_pdf(content)
+    chunks = chunk_text(text)
+    top_chunks = get_top_k_chunks(chunks, question)
+    context = "\n".join(top_chunks)
+
+    prompt = f"Answer the following question using ONLY the context below:\n\n{context}\n\nQuestion: {question}\nAnswer:"
+    answer = get_groq_response(prompt)
     return {"answer": answer}

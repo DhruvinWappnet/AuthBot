@@ -88,6 +88,7 @@ def login_signup_page():
                 st.error(f"Error: {e}")
 
 # --- Chatbot Page ---
+
 # def chatbot_page():
 #     st.subheader("Ask me anything 🤖")
 
@@ -98,12 +99,11 @@ def login_signup_page():
 #         else:
 #             st.markdown(f"**Bot:** {msg}")
 
-#     # Persistent input box
+#     # Input box with state tracking
 #     st.session_state.chat_input = st.text_input("You:", value=st.session_state.chat_input, key="chat_input_box")
 
 #     if st.button("Send"):
 #         user_input = st.session_state.chat_input.strip()
-#         user_input=user_input.strip()
 #         if not user_input:
 #             st.warning("Please enter a message.")
 #         else:
@@ -112,7 +112,10 @@ def login_signup_page():
 #                     headers = {"Authorization": f"Bearer {st.session_state.token}"}
 #                     response = client.post(
 #                         f"{API_BASE_URL}/chat/query",
-#                         json={"question": user_input},
+#                          json={
+#                                 "question": user_input,
+#                                 "session_id": generate_session_token(st.session_state.email)  # or any unique session ID
+#                             },
 #                         headers=headers
 #                     )
 #                 if response.status_code == 200:
@@ -122,6 +125,7 @@ def login_signup_page():
 #                     st.session_state.chat_history.append(("user", user_input))
 #                     st.session_state.chat_history.append(("bot", reply))
 
+#                     # ✅ Clear the input before rerun
 #                     st.session_state.chat_input = ""
 #                     st.rerun()
 #                 else:
@@ -129,49 +133,71 @@ def login_signup_page():
 #             except Exception as e:
 #                 st.error(f"Exception occurred: {e}")
 
+# Chatbot page
 def chatbot_page():
-    st.subheader("Ask me anything 🤖")
+    st.subheader("📄 Chat with your PDF")
 
-    # Display past chat history
+    uploaded_pdf = st.file_uploader("Upload a PDF to start chatting", type=["pdf"])
+
+    if uploaded_pdf:
+        prev_pdf = st.session_state.get("uploaded_pdf_name", None)
+        if uploaded_pdf.name != prev_pdf:
+            st.session_state.chat_history = []
+            st.session_state.uploaded_pdf = uploaded_pdf
+            st.session_state.uploaded_pdf_name = uploaded_pdf.name
+
+    if "uploaded_pdf" not in st.session_state:
+        st.info("Please upload a PDF to begin chatting.")
+        return
+
+    # 🔄 Clear input before rendering input box (must come before st.text_input)
+    if "clear_input" in st.session_state and st.session_state.clear_input:
+        st.session_state.chat_input_box = ""
+        st.session_state.clear_input = False
+
+    # Show previous chat history
     for role, msg in st.session_state.chat_history:
-        if role == "user":
-            st.markdown(f"**You:** {msg}")
-        else:
-            st.markdown(f"**Bot:** {msg}")
+        st.markdown(f"**{role.capitalize()}**: {msg}")
 
-    # Input box with state tracking
-    st.session_state.chat_input = st.text_input("You:", value=st.session_state.chat_input, key="chat_input_box")
+    # Input box
+    user_input = st.text_input("You:", key="chat_input_box")
 
     if st.button("Send"):
-        user_input = st.session_state.chat_input.strip()
+        user_input = user_input.strip()
         if not user_input:
             st.warning("Please enter a message.")
-        else:
-            try:
-                with httpx.Client() as client:
-                    headers = {"Authorization": f"Bearer {st.session_state.token}"}
-                    response = client.post(
-                        f"{API_BASE_URL}/chat/query",
-                         json={
-                                "question": user_input,
-                                "session_id": generate_session_token(st.session_state.email)  # or any unique session ID
-                            },
-                        headers=headers
-                    )
-                if response.status_code == 200:
-                    reply = response.json().get("answer", "No response.")
+            return
 
-                    # Save messages
-                    st.session_state.chat_history.append(("user", user_input))
-                    st.session_state.chat_history.append(("bot", reply))
+        # Save last 15 messages
+        history = st.session_state.chat_history[-15:]
+        messages = [{"role": role, "content": msg} for role, msg in history]
 
-                    # ✅ Clear the input before rerun
-                    st.session_state.chat_input = ""
-                    st.rerun()
-                else:
-                    st.error("Failed to get response from server.")
-            except Exception as e:
-                st.error(f"Exception occurred: {e}")
+        try:
+            files = {
+                "file": (
+                    st.session_state.uploaded_pdf.name,
+                    st.session_state.uploaded_pdf,
+                    "application/pdf"
+                )
+            }
+            response = httpx.post(
+                f"{API_BASE_URL}/chat/pdf-query",
+                params={"question": user_input},
+                files=files
+            )
+            if response.status_code == 200:
+                bot_reply = response.json().get("answer", "No response.")
+                st.session_state.chat_history.append(("user", user_input))
+                st.session_state.chat_history.append(("bot", bot_reply))
+                st.session_state.chat_history = st.session_state.chat_history[-15:]
+
+                # ✅ Signal to clear input box on next rerun
+                st.session_state.clear_input = True
+                st.rerun()
+            else:
+                st.error("Failed to get response from server.")
+        except Exception as e:
+            st.error(f"Error: {e}")
 
 # --- Routing ---
 if st.session_state.logged_in:

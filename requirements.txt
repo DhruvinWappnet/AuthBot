@@ -8,3 +8,5 @@ python-jose[cryptography]
 pydantic
 psycopg2
 streamlit-extras
+PyPDF2
+sentence_transformers

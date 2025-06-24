@@ -1,5 +1,7 @@
 import streamlit as st
 import httpx
+
+from app.core.session_store import generate_session_token
 # from streamlit_extras.app_cookie_manager import CookieManager
 
 API_BASE_URL = "http://localhost:8000"  # Replace with your actual backend URL
@@ -150,7 +152,10 @@ def chatbot_page():
                     headers = {"Authorization": f"Bearer {st.session_state.token}"}
                     response = client.post(
                         f"{API_BASE_URL}/chat/query",
-                        json={"question": user_input},
+                         json={
+                                "question": user_input,
+                                "session_id": generate_session_token(st.session_state.email)  # or any unique session ID
+                            },
                         headers=headers
                     )
                 if response.status_code == 200:

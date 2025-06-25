@@ -8,7 +8,7 @@ def get_groq_response(prompt: str) -> str:
         completion = client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[{"role": "user", "content": prompt}],
-            temperature=1,
+            temperature=0.7,
             max_completion_tokens=1024,
             top_p=1,
             stream=True,

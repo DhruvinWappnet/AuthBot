@@ -192,7 +192,7 @@ def chatbot_page():
                     st.session_state.fetched_emails = response.json().get("emails", [])
                 elif response.status_code == 400:
                     st.warning("⚠️ Gmail is not connected.")
-                    connect_url = f"{API_BASE_URL}/gmail/connect-gmail?email={st.session_state.email}"
+                    connect_url = f"{API_BASE_URL}/gmail/connect-gmail-dev?email={st.session_state.email}"
                     st.markdown(f"[🔗 Connect Gmail]({connect_url})")
                 else:
                     st.error("❌ Something went wrong while fetching emails.")

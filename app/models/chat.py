@@ -13,3 +13,5 @@ class Message(Base):
     content = Column(String, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow)
     session_id = Column(String, index=True)  # Optional: to track conversations per user
+
+

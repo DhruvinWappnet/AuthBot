@@ -1,3 +1,4 @@
+from fastapi import requests
 import streamlit as st
 import httpx
 
@@ -89,117 +90,145 @@ def login_signup_page():
 
 # --- Chatbot Page ---
 
-# def chatbot_page():
-#     st.subheader("Ask me anything 🤖")
 
-#     # Display past chat history
-#     for role, msg in st.session_state.chat_history:
-#         if role == "user":
-#             st.markdown(f"**You:** {msg}")
-#         else:
-#             st.markdown(f"**Bot:** {msg}")
-
-#     # Input box with state tracking
-#     st.session_state.chat_input = st.text_input("You:", value=st.session_state.chat_input, key="chat_input_box")
-
-#     if st.button("Send"):
-#         user_input = st.session_state.chat_input.strip()
-#         if not user_input:
-#             st.warning("Please enter a message.")
-#         else:
-#             try:
-#                 with httpx.Client() as client:
-#                     headers = {"Authorization": f"Bearer {st.session_state.token}"}
-#                     response = client.post(
-#                         f"{API_BASE_URL}/chat/query",
-#                          json={
-#                                 "question": user_input,
-#                                 "session_id": generate_session_token(st.session_state.email)  # or any unique session ID
-#                             },
-#                         headers=headers
-#                     )
-#                 if response.status_code == 200:
-#                     reply = response.json().get("answer", "No response.")
-
-#                     # Save messages
-#                     st.session_state.chat_history.append(("user", user_input))
-#                     st.session_state.chat_history.append(("bot", reply))
-
-#                     # ✅ Clear the input before rerun
-#                     st.session_state.chat_input = ""
-#                     st.rerun()
-#                 else:
-#                     st.error("Failed to get response from server.")
-#             except Exception as e:
-#                 st.error(f"Exception occurred: {e}")
-
-# Chatbot page
 def chatbot_page():
-    st.subheader("📄 Chat with your PDF")
+    st.subheader("💬 Chat Interface")
 
-    uploaded_pdf = st.file_uploader("Upload a PDF to start chatting", type=["pdf"])
+    tabs = st.tabs(["Text Chat", "Chat with PDF", "Chat with Audio", "Email Assistant"])
 
-    if uploaded_pdf:
-        prev_pdf = st.session_state.get("uploaded_pdf_name", None)
-        if uploaded_pdf.name != prev_pdf:
-            st.session_state.chat_history = []
-            st.session_state.uploaded_pdf = uploaded_pdf
-            st.session_state.uploaded_pdf_name = uploaded_pdf.name
-
-    if "uploaded_pdf" not in st.session_state:
-        st.info("Please upload a PDF to begin chatting.")
-        return
-
-    # 🔄 Clear input before rendering input box (must come before st.text_input)
-    if "clear_input" in st.session_state and st.session_state.clear_input:
-        st.session_state.chat_input_box = ""
-        st.session_state.clear_input = False
-
-    # Show previous chat history
+    # Show previous chat messages
     for role, msg in st.session_state.chat_history:
         st.markdown(f"**{role.capitalize()}**: {msg}")
 
-    # Input box
-    user_input = st.text_input("You:", key="chat_input_box")
+    # Text Chat
+    with tabs[0]:
+        with st.form("text_chat_form"):
+            user_input = st.text_input("You:", key="chat_input_text")
+            send_text = st.form_submit_button("Send (Text Chat)")
 
-    if st.button("Send"):
-        user_input = user_input.strip()
-        if not user_input:
-            st.warning("Please enter a message.")
-            return
-
-        # Save last 15 messages
-        history = st.session_state.chat_history[-15:]
-        messages = [{"role": role, "content": msg} for role, msg in history]
-
-        try:
-            files = {
-                "file": (
-                    st.session_state.uploaded_pdf.name,
-                    st.session_state.uploaded_pdf,
-                    "application/pdf"
+        if send_text:
+            if not user_input.strip():
+                st.warning("Please enter a message.")
+            else:
+                response = httpx.post(
+                    f"{API_BASE_URL}/chat/query",
+                    json={
+                        "question": user_input.strip(),
+                        "session_id": f"normal_{st.session_state.email}"
+                    }
                 )
-            }
+                if response.status_code == 200:
+                    answer = response.json().get("answer", "No response.")
+                    st.session_state.chat_history.append(("user", user_input))
+                    st.session_state.chat_history.append(("bot", answer))
+                    st.rerun()
+                else:
+                    st.error("Text chat failed.")
+
+    # Chat with PDF
+    with tabs[1]:
+        with st.form("pdf_chat_form"):
+            uploaded_pdf = st.file_uploader("Upload a PDF", type=["pdf"])
+            pdf_question = st.text_input("Ask a question based on the PDF:")
+            send_pdf = st.form_submit_button("Send (PDF)")
+
+        if send_pdf:
+            if not uploaded_pdf or not pdf_question.strip():
+                st.warning("Please upload a PDF and enter a question.")
+            else:
+                files = {"file": (uploaded_pdf.name, uploaded_pdf, "application/pdf")}
+                data = {"question": pdf_question.strip()}
+                response = httpx.post(
+                    f"{API_BASE_URL}/chat/pdf-query",
+                    data=data,
+                    files=files
+                )
+                if response.status_code == 200:
+                    answer = response.json().get("answer", "No response.")
+                    st.session_state.chat_history.append(("user", f"[PDF Q] {pdf_question}"))
+                    st.session_state.chat_history.append(("bot", answer))
+                    st.rerun()
+                else:
+                    st.error("PDF chat failed.")
+
+    # Chat with Audio
+    with tabs[2]:
+        uploaded_audio = st.file_uploader("Upload audio file", type=["mp3", "wav", "m4a"])
+        if uploaded_audio and st.button("Send (Audio)", key="send_audio"):
+            files = {"file": (uploaded_audio.name, uploaded_audio, "audio/mpeg")}
             response = httpx.post(
-                f"{API_BASE_URL}/chat/pdf-query",
-                params={"question": user_input},
+                f"{API_BASE_URL}/chat/audio-query",
+                params={"question": "Transcribe and respond to this audio"},
                 files=files
             )
             if response.status_code == 200:
-                bot_reply = response.json().get("answer", "No response.")
-                st.session_state.chat_history.append(("user", user_input))
-                st.session_state.chat_history.append(("bot", bot_reply))
-                st.session_state.chat_history = st.session_state.chat_history[-15:]
-
-                # ✅ Signal to clear input box on next rerun
-                st.session_state.clear_input = True
+                answer = response.json().get("answer", "No response.")
+                st.session_state.chat_history.append(("user", "[Audio Uploaded]"))
+                st.session_state.chat_history.append(("bot", answer))
                 st.rerun()
             else:
-                st.error("Failed to get response from server.")
-        except Exception as e:
-            st.error(f"Error: {e}")
+                st.error("Audio chat failed.")
 
-# --- Routing ---
+    # ✅ Email Assistant
+        # ✅ Email Assistant
+    with tabs[3]:
+        st.info("📬 Email Assistant - Fetch and summarize important emails")
+
+        if "fetched_emails" not in st.session_state:
+            st.session_state.fetched_emails = []
+        if "email_summaries" not in st.session_state:
+            st.session_state.email_summaries = {}
+
+        # 🔄 Fetch Emails Button
+        if st.button("🔄 Fetch Emails"):
+            try:
+                response = httpx.post(
+                    f"{API_BASE_URL}/email_router/list",
+                    headers={"Authorization": f"Bearer {st.session_state.token}"},
+                    timeout=30
+                )
+                if response.status_code == 200:
+                    st.success("✅ Fetched important emails.")
+                    st.session_state.fetched_emails = response.json().get("emails", [])
+                elif response.status_code == 400:
+                    st.warning("⚠️ Gmail is not connected.")
+                    connect_url = f"{API_BASE_URL}/gmail/connect-gmail?email={st.session_state.email}"
+                    st.markdown(f"[🔗 Connect Gmail]({connect_url})")
+                else:
+                    st.error("❌ Something went wrong while fetching emails.")
+            except httpx.ReadTimeout:
+                st.error("⏱️ Timeout while fetching emails.")
+
+        # 📬 Display Emails in Table
+        if st.session_state.fetched_emails:
+            for email in st.session_state.fetched_emails:
+                col1, col2 = st.columns([0.75, 0.25])
+
+                with col1:
+                    st.markdown(f"""
+                    **Subject:** {email['subject']}  
+                    **From:** {email['from']}  
+                    **Label:** `{email['label']}`  
+                    [📧 View in Gmail](https://mail.google.com/mail/u/0/#inbox/{email['id']})
+                    """)
+
+                    if email["id"] in st.session_state.email_summaries:
+                        st.markdown(f"📝 **Summary:** {st.session_state.email_summaries[email['id']]}")
+
+                with col2:
+                    if st.button("🧠 Summarize", key=f"summarize_{email['id']}"):
+                        sres = httpx.post(
+                            f"{API_BASE_URL}/email_router/summarize",
+                            params={"email_id": email["id"]},
+                            headers={"Authorization": f"Bearer {st.session_state.token}"}
+                        )
+                        if sres.status_code == 200:
+                            summary = sres.json()["summary"]
+                            st.session_state.email_summaries[email["id"]] = summary
+                            st.rerun()
+                        else:
+                            st.error("❌ Failed to summarize this email.")
+
 if st.session_state.logged_in:
     chatbot_page()
 else:

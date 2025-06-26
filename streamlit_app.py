@@ -25,20 +25,6 @@ if "email" not in st.session_state:
 if "chat_input" not in st.session_state:
     st.session_state.chat_input = ""
 
-# --- Restore Session from Cookie (if exists) ---
-# cookie_token = cookie_manager.get("session_token")
-# if cookie_token and not st.session_state.logged_in:
-#     try:
-#         with httpx.Client() as client:
-#             response = client.post(f"{API_BASE_URL}/auth/session", json={"session_token": cookie_token})
-#         if response.status_code == 200:
-#             data = response.json()
-#             st.session_state.logged_in = True
-#             st.session_state.token = data.get("access_token", "")
-#             st.session_state.email = data.get("email", "")
-#     except Exception as e:
-#         st.warning(f"Session restore failed: {e}")
-
 # --- Sidebar (Logout) ---
 if st.session_state.logged_in:
     with st.sidebar:
@@ -94,7 +80,7 @@ def login_signup_page():
 def chatbot_page():
     st.subheader("💬 Chat Interface")
 
-    tabs = st.tabs(["Text Chat", "Chat with PDF", "Chat with Audio", "Email Assistant"])
+    tabs = st.tabs(["Text Chat", "Chat with PDF", "Chat with Audio", "Email Assistant", "Token Usage"])
 
     # Show previous chat messages
     for role, msg in st.session_state.chat_history:
@@ -115,12 +101,18 @@ def chatbot_page():
                     json={
                         "question": user_input.strip(),
                         "session_id": f"normal_{st.session_state.email}"
-                    }
+                    },
+                    headers={"Authorization": f"Bearer {st.session_state.token}"}
                 )
+
                 if response.status_code == 200:
-                    answer = response.json().get("answer", "No response.")
+                    res = response.json()
+                    answer = res.get("answer", "No response.")
+                    token_usage = res.get("token_usage", {})
+
                     st.session_state.chat_history.append(("user", user_input))
                     st.session_state.chat_history.append(("bot", answer))
+                    st.success(f"Tokens used — Prompt: {token_usage.get('prompt_tokens', 0)}, Completion: {token_usage.get('completion_tokens', 0)}")
                     st.rerun()
                 else:
                     st.error("Text chat failed.")
@@ -137,16 +129,26 @@ def chatbot_page():
                 st.warning("Please upload a PDF and enter a question.")
             else:
                 files = {"file": (uploaded_pdf.name, uploaded_pdf, "application/pdf")}
-                data = {"question": pdf_question.strip()}
+                data = {
+                    "question": pdf_question.strip(),
+                    "session_id": f"pdf_{st.session_state.email}"
+                }
+
                 response = httpx.post(
                     f"{API_BASE_URL}/chat/pdf-query",
                     data=data,
-                    files=files
+                    files=files,
+                    headers={"Authorization": f"Bearer {st.session_state.token}"}
                 )
+
                 if response.status_code == 200:
-                    answer = response.json().get("answer", "No response.")
+                    res = response.json()
+                    answer = res.get("answer", "No response.")
+                    token_usage = res.get("token_usage", {})
+
                     st.session_state.chat_history.append(("user", f"[PDF Q] {pdf_question}"))
                     st.session_state.chat_history.append(("bot", answer))
+                    st.success(f"Tokens used — Prompt: {token_usage.get('prompt_tokens', 0)}, Completion: {token_usage.get('completion_tokens', 0)}")
                     st.rerun()
                 else:
                     st.error("PDF chat failed.")
@@ -171,6 +173,7 @@ def chatbot_page():
 
     # ✅ Email Assistant
         # ✅ Email Assistant
+    # ✅ Email Assistant
     with tabs[3]:
         st.info("📬 Email Assistant - Fetch and summarize important emails")
 
@@ -178,6 +181,8 @@ def chatbot_page():
             st.session_state.fetched_emails = []
         if "email_summaries" not in st.session_state:
             st.session_state.email_summaries = {}
+        if "email_token_usage" not in st.session_state:
+            st.session_state.email_token_usage = {}
 
         # 🔄 Fetch Emails Button
         if st.button("🔄 Fetch Emails"):
@@ -201,6 +206,8 @@ def chatbot_page():
 
         # 📬 Display Emails in Table
         if st.session_state.fetched_emails:
+            total_prompt = total_completion = 0
+
             for email in st.session_state.fetched_emails:
                 col1, col2 = st.columns([0.75, 0.25])
 
@@ -212,8 +219,21 @@ def chatbot_page():
                     [📧 View in Gmail](https://mail.google.com/mail/u/0/#inbox/{email['id']})
                     """)
 
+                    # Show summary if already done
                     if email["id"] in st.session_state.email_summaries:
                         st.markdown(f"📝 **Summary:** {st.session_state.email_summaries[email['id']]}")
+                        usage = st.session_state.email_token_usage.get(email["id"], {})
+                        if usage:
+                            st.markdown(f"""
+                            🔢 **Tokens used**:  
+                            - Prompt: `{usage.get('prompt_tokens', 0)}`  
+                            - Completion: `{usage.get('completion_tokens', 0)}`  
+                            - Total: `{usage.get('total_tokens', 0)}`
+                            """)
+
+                            # Add to total count
+                            total_prompt += usage.get('prompt_tokens', 0)
+                            total_completion += usage.get('completion_tokens', 0)
 
                 with col2:
                     if st.button("🧠 Summarize", key=f"summarize_{email['id']}"):
@@ -223,11 +243,61 @@ def chatbot_page():
                             headers={"Authorization": f"Bearer {st.session_state.token}"}
                         )
                         if sres.status_code == 200:
-                            summary = sres.json()["summary"]
+                            res_json = sres.json()
+                            summary = res_json["summary"]
+                            tokens = res_json.get("token_usage", {})
+
                             st.session_state.email_summaries[email["id"]] = summary
+                            st.session_state.email_token_usage[email["id"]] = tokens
+
+                            st.success(f"✅ Summary generated. Tokens used - Prompt: {tokens.get('prompt_tokens', 0)}, Completion: {tokens.get('completion_tokens', 0)}")
                             st.rerun()
                         else:
                             st.error("❌ Failed to summarize this email.")
+
+            # 📊 Show total usage at the bottom
+            total_tokens = total_prompt + total_completion
+            if total_tokens > 0:
+                st.markdown("---")
+                st.markdown(f"📈 **Total Tokens Used for Summarization:**")
+                st.markdown(f"- Prompt Tokens: `{total_prompt}`")
+                st.markdown(f"- Completion Tokens: `{total_completion}`")
+                st.markdown(f"- **Total Tokens**: `{total_tokens}`")
+
+    # 📊 Token Usage Tab
+    with tabs[4]:
+        st.info("📈 Token Usage Over Time")
+
+        try:
+            res = httpx.get(
+                f"{API_BASE_URL}/analytics/usage",
+                headers={"Authorization": f"Bearer {st.session_state.token}"}
+            )
+            if res.status_code == 200:
+                usage_data = res.json()
+
+                if usage_data:
+                    import pandas as pd
+
+                    df = pd.DataFrame(usage_data)
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+                    # Plot total tokens over time
+                    st.line_chart(
+                        df.set_index("timestamp")[["total_tokens"]],
+                        use_container_width=True
+                    )
+
+                    with st.expander("📄 Detailed Log"):
+                        st.dataframe(df[["timestamp", "total_tokens", "message"]].sort_values(by="timestamp", ascending=False))
+
+                else:
+                    st.warning("ℹ️ No token usage yet.")
+
+            else:
+                st.error("❌ Failed to fetch usage data.")
+        except Exception as e:
+            st.error(f"🚨 Error: {e}")
 
 if st.session_state.logged_in:
     chatbot_page()

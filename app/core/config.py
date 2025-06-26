@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     groq_api_key: str
     SQLALCHEMY_DATABASE_URL :str
+    QUADRANT_API_KEY:str
 
 
     class Config:

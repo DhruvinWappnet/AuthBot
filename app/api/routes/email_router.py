@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from requests import Session
 from app.db.database import get_db
+from app.models.email import EmailSummary
 from app.models.user import User
 from app.services.gmail_service import get_gmail_service, fetch_recent_emails
 from app.services.llm_tools import classify_email, summarize_email
@@ -44,16 +45,64 @@ def list_emails(current_user = Depends(get_current_user_token)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+#==========================PREVIOUS WORKING========================
+# @router.post("/summarize")
+# def summarize(email_id: str, current_user = Depends(get_current_user_token)):
+#     if not current_user.gmail_token:
+#         raise HTTPException(status_code=400, detail="Gmail not connected for this user.")
+
+#     service = get_gmail_service(current_user.gmail_token)
+#     msg = service.users().messages().get(userId='me', id=email_id, format='full').execute()
+#     full_text = msg.get("snippet", "")
+#     summary = summarize_email(full_text)
+#     return {"summary": summary}
+#===============================================================
+
+#=====================UPDATED=============================
 @router.post("/summarize")
-def summarize(email_id: str, current_user = Depends(get_current_user_token)):
+def summarize(
+    email_id: str,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user_token)
+):
     if not current_user.gmail_token:
         raise HTTPException(status_code=400, detail="Gmail not connected for this user.")
 
     service = get_gmail_service(current_user.gmail_token)
     msg = service.users().messages().get(userId='me', id=email_id, format='full').execute()
     full_text = msg.get("snippet", "")
-    summary = summarize_email(full_text)
+
+    # 🔄 Summarize the email and track usage
+    summary, token_usage = summarize_email(full_text)  # <-- must return (summary, token_usage)
+
+    # ✅ Save email summary to DB
+    email_summary = EmailSummary(
+        email_id=email_id,
+        user_email=current_user.email,
+        full_text=full_text,
+        summary=summary
+    )
+    db.add(email_summary)
+
+    # ✅ Save token usage if available
+    if token_usage:
+        from app.models.token_usage import TokenUsage  # import if not already
+
+        usage_entry = TokenUsage(
+            user_email=current_user.email,
+            session_id=f"email_{email_id}",
+            prompt_tokens=token_usage.get("prompt_tokens", 0),
+            completion_tokens=token_usage.get("completion_tokens", 0),
+            total_tokens=token_usage.get("total_tokens", 0),
+            message=f"Summarized email: {email_id}"
+        )
+        db.add(usage_entry)
+
+    db.commit()
+
     return {"summary": summary}
+
+# ===========================================================
 
 @router.get("/gmail/fetch-emails")
 def fetch_emails(current_user = Depends(get_current_user_token)):

@@ -1,7 +1,6 @@
 from groq import Groq
 from app.core.config import settings  # assuming you already use this pattern
-import quadrant 
-
+from app.core.pinecone_setup import index
 client = Groq(api_key=settings.groq_api_key)
 
 # def get_groq_response(prompt: str) -> str:
@@ -50,32 +49,48 @@ def get_groq_response(prompt: str):
     except Exception as e:
         return f"Error: {str(e)}", None
 #===================================================================
+from sentence_transformers import SentenceTransformer
+
+# ✅ Load model globally (efficient)
+model = SentenceTransformer("aspire/acge_text_embedding")
 
 def get_embedding(text: str) -> list:
-    response = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=text
-    )
-    return response.data[0].embedding
+    embedding = model.encode([text])[0]  # encode returns a list of arrays
+    return embedding.tolist()  # convert NumPy array to plain list for storage/serialization
 
-quadrant.api_key = settings.QUADRANT_API_KEY
 
 def store_vector(user_id: str, email_id: str, text: str, embedding: list):
-    quadrant.upsert(vectors=[{
-        "id": f"{user_id}_{email_id}",
-        "values": embedding,
-        "metadata": {
-            "user_id": user_id,
-            "email_id": email_id,
-            "text": text
+    vector_id = f"{user_id}_{email_id}"
+
+    # 🛑 Check if vector already exists
+    existing = index.fetch(ids=[vector_id])
+    if existing and existing.vectors:  # ✅ Correct way to check
+        print(f"⚠️ Skipping duplicate: {vector_id}")
+        return
+
+    # ✅ Upsert to Pinecone
+    index.upsert(vectors=[
+        {
+            "id": vector_id,
+            "values": embedding,
+            "metadata": {
+                "user_id": user_id,
+                "email_id": email_id,
+                "text": text
+            }
         }
-    }])
+    ])
+
+
 
 def search_similar_emails(user_id: str, query: str, top_k: int = 5):
-    embedding = get_embedding(query)
-    results = quadrant.query(
-        vector=embedding,
+    query_embedding = get_embedding(query)
+    
+    result = index.query(
+        vector=query_embedding,
         top_k=top_k,
-        filter={"user_id": user_id}
+        include_metadata=True,
+        filter={"user_id": {"$eq": user_id}}  # Pinecone supports metadata filtering
     )
-    return results.matches
+    
+    return result.matches

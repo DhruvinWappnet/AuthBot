@@ -11,3 +11,4 @@ streamlit-extras
 PyPDF2
 sentence_transformers
 quadrant
+pinecone

@@ -1,305 +1,243 @@
-from fastapi import requests
+import threading
 import streamlit as st
 import httpx
+import pandas as pd
 
-from app.core.session_store import generate_session_token
-# from streamlit_extras.app_cookie_manager import CookieManager
+from app.services.email_embedding_service import trigger_embedding_background
 
-API_BASE_URL = "http://localhost:8000"  # Replace with your actual backend URL
-
-# --- Cookie Manager Setup ---
-# cookie_manager = CookieManager()
-
-# --- Set Page Config ---
-st.set_page_config(page_title="Chatbot App", page_icon="🤖")
+API_BASE_URL = "http://localhost:8000"
 
 # --- Session State Initialization ---
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "token" not in st.session_state:
-    st.session_state.token = ""
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "email" not in st.session_state:
-    st.session_state.email = ""
-if "chat_input" not in st.session_state:
-    st.session_state.chat_input = ""
+for key in ["logged_in", "token", "email"]:
+    if key not in st.session_state:
+        st.session_state[key] = ""
 
-# --- Sidebar (Logout) ---
+for history_key in ["chat_history_text", "chat_history_pdf", "chat_history_audio","chat_history_email"]:
+    if history_key not in st.session_state:
+        st.session_state[history_key] = []
+
+# --- Sidebar ---
 if st.session_state.logged_in:
     with st.sidebar:
         st.markdown("### 👤 Logged in as:")
         st.write(st.session_state.email)
         if st.button("🚪 Logout"):
-            st.session_state.logged_in = False
-            st.session_state.token = ""
-            st.session_state.email = ""
-            st.session_state.chat_history = []
-            st.session_state.chat_input = ""
-            # cookie_manager.delete("session_token")
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
             st.rerun()
 
-# --- Title ---
+# --- Page Title ---
+st.set_page_config(page_title="Chatbot App", page_icon="🤖")
 st.title("🤖 AI Chatbot")
 
-# --- Login/Signup Page ---
+# --- Auth Page ---
 def login_signup_page():
-    auth_mode = st.radio("Choose Auth Mode", ["Login", "Signup"], horizontal=True)
+    login_success = False  # 👈 Flag to return
+
+    mode = st.radio("Auth Mode", ["Login", "Signup"], horizontal=True)
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
+    if mode == "Signup":
+        confirm = st.text_input("Confirm Password", type="password")
 
-    if auth_mode == "Signup":
-        confirm_password = st.text_input("Confirm Password", type="password")
-
-    if st.button(auth_mode):
+    if st.button(mode):
         if not email or not password:
-            st.warning("Please fill in all required fields.")
-        elif auth_mode == "Signup" and password != confirm_password:
+            st.warning("Please fill all fields.")
+        elif mode == "Signup" and password != confirm:
             st.error("Passwords do not match.")
         else:
             try:
-                with httpx.Client() as client:
-                    endpoint = f"{API_BASE_URL}/auth/{auth_mode.lower()}"
-                    response = client.post(endpoint, json={"email": email, "password": password})
-                if response.status_code == 200:
-                    data = response.json()
-                    st.success(f"{auth_mode} successful!")
+                r = httpx.post(f"{API_BASE_URL}/auth/{mode.lower()}", json={"email": email, "password": password})
+                if r.status_code == 200:
+                    data = r.json()
                     st.session_state.logged_in = True
-                    st.session_state.token = data.get("access_token", "")
+                    st.session_state.token = data["access_token"]
                     st.session_state.email = email
-                    # cookie_manager.set("session_token", data.get("session_token"))
-                    st.rerun()
+                    login_success = True
+                    # st.rerun()
                 else:
-                    st.error("Invalid credentials or user already exists.")
+                    st.error("Auth failed.")
             except Exception as e:
                 st.error(f"Error: {e}")
+    return login_success
 
-# --- Chatbot Page ---
+# --- Helper to Render Chat ---
+def render_chat(history_key):
+    for role, msg in st.session_state[history_key]:
+        icon = "🧑" if role == "user" else "🤖"
+        st.markdown(f"{icon} **{role.capitalize()}**: {msg}")
 
-
+# --- Main Chatbot UI ---
 def chatbot_page():
-    st.subheader("💬 Chat Interface")
+    tabs = st.tabs(["Text Chat", "Chat with PDF", "Chat with Audio", "Email Assistant","Token Usage","Chat With Email"])
 
-    tabs = st.tabs(["Text Chat", "Chat with PDF", "Chat with Audio", "Email Assistant", "Token Usage"])
-
-    # Show previous chat messages
-    for role, msg in st.session_state.chat_history:
-        st.markdown(f"**{role.capitalize()}**: {msg}")
-
-    # Text Chat
+    # --- Text Chat Tab ---
     with tabs[0]:
-        with st.form("text_chat_form"):
-            user_input = st.text_input("You:", key="chat_input_text")
-            send_text = st.form_submit_button("Send (Text Chat)")
+        render_chat("chat_history_text")
+        with st.form("text_form"):
+            user_input = st.text_input("You:", key="text_input")
+            if st.form_submit_button("Send"):
+                if user_input.strip():
+                    res = httpx.post(
+                        f"{API_BASE_URL}/chat/query",
+                        json={"question": user_input, "session_id": f"normal_{st.session_state.email}"},
+                        headers={"Authorization": f"Bearer {st.session_state.token}"}
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        st.session_state.chat_history_text.append(("user", user_input))
+                        st.session_state.chat_history_text.append(("bot", data["answer"]))
+                        st.rerun()
+                    else:
+                        st.error("Text chat failed.")
 
-        if send_text:
-            if not user_input.strip():
-                st.warning("Please enter a message.")
-            else:
-                response = httpx.post(
-                    f"{API_BASE_URL}/chat/query",
-                    json={
-                        "question": user_input.strip(),
-                        "session_id": f"normal_{st.session_state.email}"
-                    },
-                    headers={"Authorization": f"Bearer {st.session_state.token}"}
-                )
-
-                if response.status_code == 200:
-                    res = response.json()
-                    answer = res.get("answer", "No response.")
-                    token_usage = res.get("token_usage", {})
-
-                    st.session_state.chat_history.append(("user", user_input))
-                    st.session_state.chat_history.append(("bot", answer))
-                    st.success(f"Tokens used — Prompt: {token_usage.get('prompt_tokens', 0)}, Completion: {token_usage.get('completion_tokens', 0)}")
-                    st.rerun()
-                else:
-                    st.error("Text chat failed.")
-
-    # Chat with PDF
+    # --- PDF Chat Tab ---
     with tabs[1]:
-        with st.form("pdf_chat_form"):
-            uploaded_pdf = st.file_uploader("Upload a PDF", type=["pdf"])
-            pdf_question = st.text_input("Ask a question based on the PDF:")
-            send_pdf = st.form_submit_button("Send (PDF)")
-
-        if send_pdf:
-            if not uploaded_pdf or not pdf_question.strip():
-                st.warning("Please upload a PDF and enter a question.")
-            else:
-                files = {"file": (uploaded_pdf.name, uploaded_pdf, "application/pdf")}
-                data = {
-                    "question": pdf_question.strip(),
-                    "session_id": f"pdf_{st.session_state.email}"
-                }
-
-                response = httpx.post(
-                    f"{API_BASE_URL}/chat/pdf-query",
-                    data=data,
-                    files=files,
-                    headers={"Authorization": f"Bearer {st.session_state.token}"}
-                )
-
-                if response.status_code == 200:
-                    res = response.json()
-                    answer = res.get("answer", "No response.")
-                    token_usage = res.get("token_usage", {})
-
-                    st.session_state.chat_history.append(("user", f"[PDF Q] {pdf_question}"))
-                    st.session_state.chat_history.append(("bot", answer))
-                    st.success(f"Tokens used — Prompt: {token_usage.get('prompt_tokens', 0)}, Completion: {token_usage.get('completion_tokens', 0)}")
+        render_chat("chat_history_pdf")
+        with st.form("pdf_form"):
+            pdf = st.file_uploader("Upload PDF", type=["pdf"])
+            question = st.text_input("Ask about PDF")
+            if st.form_submit_button("Send PDF") and pdf and question:
+                files = {"file": (pdf.name, pdf, "application/pdf")}
+                data = {"question": question, "session_id": f"pdf_{st.session_state.email}"}
+                r = httpx.post(f"{API_BASE_URL}/chat/pdf-query", data=data, files=files,
+                               headers={"Authorization": f"Bearer {st.session_state.token}"})
+                if r.status_code == 200:
+                    st.session_state.chat_history_pdf.append(("user", question))
+                    st.session_state.chat_history_pdf.append(("bot", r.json()["answer"]))
                     st.rerun()
                 else:
                     st.error("PDF chat failed.")
 
-    # Chat with Audio
+    # --- Audio Chat Tab ---
     with tabs[2]:
-        uploaded_audio = st.file_uploader("Upload audio file", type=["mp3", "wav", "m4a"])
-        if uploaded_audio and st.button("Send (Audio)", key="send_audio"):
-            files = {"file": (uploaded_audio.name, uploaded_audio, "audio/mpeg")}
-            response = httpx.post(
-                f"{API_BASE_URL}/chat/audio-query",
-                params={"question": "Transcribe and respond to this audio"},
-                files=files
-            )
-            if response.status_code == 200:
-                answer = response.json().get("answer", "No response.")
-                st.session_state.chat_history.append(("user", "[Audio Uploaded]"))
-                st.session_state.chat_history.append(("bot", answer))
+        render_chat("chat_history_audio")
+        audio = st.file_uploader("Upload Audio", type=["mp3", "wav", "m4a"])
+        if audio and st.button("Send Audio"):
+            files = {"file": (audio.name, audio, "audio/mpeg")}
+            r = httpx.post(f"{API_BASE_URL}/chat/audio-query",
+                           params={"question": "Transcribe and respond"},
+                           files=files)
+            if r.status_code == 200:
+                ans = r.json().get("answer", "No response.")
+                st.session_state.chat_history_audio.append(("user", "[Audio Uploaded]"))
+                st.session_state.chat_history_audio.append(("bot", ans))
                 st.rerun()
             else:
                 st.error("Audio chat failed.")
 
-    # ✅ Email Assistant
-        # ✅ Email Assistant
-    # ✅ Email Assistant
+    # --- Email Assistant Tab ---
     with tabs[3]:
-        st.info("📬 Email Assistant - Fetch and summarize important emails")
-
+        st.info("📬 Email Assistant")
         if "fetched_emails" not in st.session_state:
             st.session_state.fetched_emails = []
         if "email_summaries" not in st.session_state:
             st.session_state.email_summaries = {}
-        if "email_token_usage" not in st.session_state:
-            st.session_state.email_token_usage = {}
 
-        # 🔄 Fetch Emails Button
         if st.button("🔄 Fetch Emails"):
             try:
-                response = httpx.post(
-                    f"{API_BASE_URL}/email_router/list",
-                    headers={"Authorization": f"Bearer {st.session_state.token}"},
-                    timeout=30
-                )
-                if response.status_code == 200:
-                    st.success("✅ Fetched important emails.")
-                    st.session_state.fetched_emails = response.json().get("emails", [])
-                elif response.status_code == 400:
-                    st.warning("⚠️ Gmail is not connected.")
+                r = httpx.post(f"{API_BASE_URL}/email_router/list",
+                               headers={"Authorization": f"Bearer {st.session_state.token}"},timeout=30)
+                if r.status_code == 200:
+                    st.session_state.fetched_emails = r.json().get("emails", [])
+                elif r.status_code == 400:
+                    st.warning("Connect Gmail first.")
                     connect_url = f"{API_BASE_URL}/gmail/connect-gmail-dev?email={st.session_state.email}"
                     st.markdown(f"[🔗 Connect Gmail]({connect_url})")
                 else:
-                    st.error("❌ Something went wrong while fetching emails.")
-            except httpx.ReadTimeout:
-                st.error("⏱️ Timeout while fetching emails.")
+                    st.error("Fetch failed.")
+            except Exception as e:
+                st.error(f"Timeout: {e}")
 
-        # 📬 Display Emails in Table
-        if st.session_state.fetched_emails:
-            total_prompt = total_completion = 0
+        for email in st.session_state.fetched_emails:
+            st.markdown(f"**Subject:** {email['subject']} | **From:** {email['from']}")
+            st.markdown(f"[📧 Gmail Link](https://mail.google.com/mail/u/0/#inbox/{email['id']})")
+            if email["id"] in st.session_state.email_summaries:
+                st.markdown(f"📝 **Summary:** {st.session_state.email_summaries[email['id']]}")
+            if st.button("🧠 Summarize", key=f"summarize_{email['id']}"):
+                r = httpx.post(f"{API_BASE_URL}/email_router/summarize",
+                               params={"email_id": email["id"]},
+                               headers={"Authorization": f"Bearer {st.session_state.token}"})
+                if r.status_code == 200:
+                    st.session_state.email_summaries[email["id"]] = r.json()["summary"]
+                    st.rerun()
+                else:
+                    st.error("Summarization failed.") 
+   
+    # --- Token Usage Tab ---
+    with tabs[4]:
+        st.info("📊 Token Usage")
+        try:
+            r = httpx.get(f"{API_BASE_URL}/analytics/usage",
+                          headers={"Authorization": f"Bearer {st.session_state.token}"})
+            if r.status_code == 200:
+                usage = r.json()
+                if usage:
+                    df = pd.DataFrame(usage)
+                    df["timestamp"] = pd.to_datetime(df["timestamp"])
+                    st.line_chart(df.set_index("timestamp")[["total_tokens"]])
+                    with st.expander("📋 Full Log"):
+                        st.dataframe(df[["timestamp", "total_tokens", "message"]])
+                else:
+                    st.info("No usage yet.")
+            else:
+                st.error("Failed to fetch token usage.")
+        except Exception as e:
+            st.error(f"Error: {e}")
+# --- Talk with Emails Tab ---
+    
+    with tabs[5]:
+        st.info("💬 Ask questions based on your recent emails")
 
-            for email in st.session_state.fetched_emails:
-                col1, col2 = st.columns([0.75, 0.25])
+        # 🧠 Render previous chat history (User, Bot)
+        for role, msg in st.session_state.chat_history_email:
+            if role == "user":
+                st.markdown(f"🧑 **You**: {msg}")
+            elif role == "bot":
+                st.markdown(f"🤖 **Bot**: {msg}")
+            elif role == "system":
+                st.markdown(f"⚙️ *{msg}*")
 
-                with col1:
-                    st.markdown(f"""
-                    **Subject:** {email['subject']}  
-                    **From:** {email['from']}  
-                    **Label:** `{email['label']}`  
-                    [📧 View in Gmail](https://mail.google.com/mail/u/0/#inbox/{email['id']})
-                    """)
-
-                    # Show summary if already done
-                    if email["id"] in st.session_state.email_summaries:
-                        st.markdown(f"📝 **Summary:** {st.session_state.email_summaries[email['id']]}")
-                        usage = st.session_state.email_token_usage.get(email["id"], {})
-                        if usage:
-                            st.markdown(f"""
-                            🔢 **Tokens used**:  
-                            - Prompt: `{usage.get('prompt_tokens', 0)}`  
-                            - Completion: `{usage.get('completion_tokens', 0)}`  
-                            - Total: `{usage.get('total_tokens', 0)}`
-                            """)
-
-                            # Add to total count
-                            total_prompt += usage.get('prompt_tokens', 0)
-                            total_completion += usage.get('completion_tokens', 0)
-
-                with col2:
-                    if st.button("🧠 Summarize", key=f"summarize_{email['id']}"):
-                        sres = httpx.post(
-                            f"{API_BASE_URL}/email_router/summarize",
-                            params={"email_id": email["id"]},
+        # 📥 Ask a new question
+        question = st.text_input("Ask a question (e.g., 'Do I have any meetings today?')", key="email_chat_input")
+        if st.button("Ask Email Question"):
+            if question.strip():
+                with st.spinner("Thinking..."):
+                    try:
+                        res = httpx.post(
+                            f"{API_BASE_URL}/chat/query-email",
+                            json={"question": question, "session_id": f"email_{st.session_state.email}"},
                             headers={"Authorization": f"Bearer {st.session_state.token}"}
                         )
-                        if sres.status_code == 200:
-                            res_json = sres.json()
-                            summary = res_json["summary"]
-                            tokens = res_json.get("token_usage", {})
-
-                            st.session_state.email_summaries[email["id"]] = summary
-                            st.session_state.email_token_usage[email["id"]] = tokens
-
-                            st.success(f"✅ Summary generated. Tokens used - Prompt: {tokens.get('prompt_tokens', 0)}, Completion: {tokens.get('completion_tokens', 0)}")
+                        if res.status_code == 200:
+                            answer = res.json()["answer"]
+                            st.session_state.chat_history_email.append(("user", question))
+                            st.session_state.chat_history_email.append(("bot", answer))
                             st.rerun()
                         else:
-                            st.error("❌ Failed to summarize this email.")
+                            st.session_state.chat_history_email.append(("system", "❌ Failed to answer your question."))
+                            st.rerun()
+                    except Exception as e:
+                        st.session_state.chat_history_email.append(("system", f"❌ Error: {e}"))
+                        st.rerun()
 
-            # 📊 Show total usage at the bottom
-            total_tokens = total_prompt + total_completion
-            if total_tokens > 0:
-                st.markdown("---")
-                st.markdown(f"📈 **Total Tokens Used for Summarization:**")
-                st.markdown(f"- Prompt Tokens: `{total_prompt}`")
-                st.markdown(f"- Completion Tokens: `{total_completion}`")
-                st.markdown(f"- **Total Tokens**: `{total_tokens}`")
-
-    # 📊 Token Usage Tab
-    with tabs[4]:
-        st.info("📈 Token Usage Over Time")
-
-        try:
-            res = httpx.get(
-                f"{API_BASE_URL}/analytics/usage",
-                headers={"Authorization": f"Bearer {st.session_state.token}"}
-            )
-            if res.status_code == 200:
-                usage_data = res.json()
-
-                if usage_data:
-                    import pandas as pd
-
-                    df = pd.DataFrame(usage_data)
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
-
-                    # Plot total tokens over time
-                    st.line_chart(
-                        df.set_index("timestamp")[["total_tokens"]],
-                        use_container_width=True
-                    )
-
-                    with st.expander("📄 Detailed Log"):
-                        st.dataframe(df[["timestamp", "total_tokens", "message"]].sort_values(by="timestamp", ascending=False))
-
-                else:
-                    st.warning("ℹ️ No token usage yet.")
-
-            else:
-                st.error("❌ Failed to fetch usage data.")
-        except Exception as e:
-            st.error(f"🚨 Error: {e}")
-
+# --- Start App ---
+# if st.session_state.logged_in:
+#     chatbot_page()
+# else:
+#     login_signup_page()
+ 
 if st.session_state.logged_in:
     chatbot_page()
 else:
-    login_signup_page()
+    logged_in_now = login_signup_page()
+    if logged_in_now:
+        print("🔥 Starting email embedding thread...")
+
+        # 🔁 Fire and forget background embedding
+        threading.Thread(
+            target=trigger_embedding_background,
+            args=(st.session_state.token,),
+            daemon=True
+        ).start()
+        st.rerun()  # rerun to load chatbot interface

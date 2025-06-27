@@ -3,11 +3,17 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from requests import Session
 from app.core.auth import get_current_user_token
+from app.prompt import email_prompt
 from app.schemas.chat import MessageCreate
 from app.services.chat_service import save_message
 from app.services.groq_service import get_groq_response
 from app.db.database import get_db
+from fastapi import UploadFile, File, Form
+from app.models.token_usage import TokenUsage
 from app.services.pdf_service import extract_text_from_pdf,chunk_text,get_top_k_chunks  # database session dependency
+from sentence_transformers import SentenceTransformer
+from app.core.pinecone_setup import index
+
 router = APIRouter()
 
 class ChatRequest(BaseModel):
@@ -82,8 +88,6 @@ class ChatRequest(BaseModel):
 #========================================================================#
 
 #============UPDATION=================#
-from app.models.token_usage import TokenUsage  # ✅ Ensure this is imported
-from app.core.auth import get_current_user_token  # ✅ To get current user
 
 @router.post("/query")
 def chat_endpoint(
@@ -130,7 +134,6 @@ def chat_endpoint(
         "answer": answer,
         "token_usage": token_usage
     }
-from fastapi import UploadFile, File, Form
 #==================PREVIOUS WORKING=======================#
 
 # @router.post("/pdf-query")
@@ -155,8 +158,6 @@ from fastapi import UploadFile, File, Form
 #========================================================
 
 #==================UPDATED=====================
-from app.models.token_usage import TokenUsage  # ✅ Make sure this import is present
-
 @router.post("/pdf-query")
 async def chat_with_pdf(
     file: UploadFile = File(...),
@@ -214,6 +215,72 @@ async def chat_with_pdf(
         db.commit()
 
     # ✅ Return response and usage
+    return {
+        "answer": answer,
+        "token_usage": token_usage
+    }
+
+
+
+# =======================================
+router = APIRouter()
+model = SentenceTransformer("aspire/acge_text_embedding")
+
+@router.post("/query-email")
+def query_email_chat(
+    request: ChatRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user_token)
+):
+    user_id = current_user.email
+    question = request.question
+    session_id = request.session_id
+
+    if not question.strip():
+        raise HTTPException(status_code=400, detail="Please provide a valid question.")
+
+    # ✅ Embed the user question
+    query_embedding = model.encode([question])[0].tolist()
+
+    # ✅ Query Pinecone
+    pinecone_response = index.query(
+        vector=query_embedding,
+        top_k=5,
+        include_metadata=True,
+        filter={"user_id": {"$eq": user_id}}
+    )
+
+    matches = pinecone_response.get("matches", [])
+    if not matches:
+        answer = "Sorry, I couldn't find any emails related to your question."
+        save_message(db, MessageCreate(sender="user", content=question, session_id=session_id))
+        save_message(db, MessageCreate(sender="bot", content=answer, session_id=session_id))
+        return {"answer": answer, "token_usage": None}
+
+    # ✅ Build context from top email matches
+    context = "\n".join([f"- {match['metadata']['text']}" for match in matches])
+
+    # ✅ Ask LLM
+    prompt = email_prompt.email_prompts(context=context,question=question)
+    answer, token_usage = get_groq_response(prompt)
+
+    # ✅ Save messages
+    save_message(db, MessageCreate(sender="user", content=question, session_id=session_id))
+    save_message(db, MessageCreate(sender="bot", content=answer, session_id=session_id))
+
+    # ✅ Store token usage
+    if token_usage:
+        usage_record = TokenUsage(
+            user_email=user_id,
+            session_id=session_id,
+            prompt_tokens=token_usage["prompt_tokens"],
+            completion_tokens=token_usage["completion_tokens"],
+            total_tokens=token_usage["total_tokens"],
+            message=question
+        )
+        db.add(usage_record)
+        db.commit()
+
     return {
         "answer": answer,
         "token_usage": token_usage

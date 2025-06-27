@@ -12,19 +12,8 @@ Email Content:
 {content}
 \"\"\"
 """
-    result = get_groq_response(prompt)
+    result,_ = get_groq_response(prompt)
     return result.strip().split("\n")[0]  # In case model adds explanation
-
-# def summarize_email(content: str) -> str:
-#     prompt = f"""
-# Summarize the following email in 1-2 concise sentences for a user interface display.
-
-# Email:
-# \"\"\"
-# {content}
-# \"\"\"
-# """
-#     return get_groq_response(prompt).strip()
 
 
 def summarize_email(content: str) -> tuple[str, dict]:

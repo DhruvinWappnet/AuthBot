@@ -61,27 +61,3 @@ from app.services.email_embedding_service import embed_and_store_emails
 
 #     return {"message": "Gmail connected & emails embedded"}
 
-
-@router.post("/embed")
-def embed_user_emails(current_user=Depends(get_current_user_token)):
-    if not current_user.gmail_token:
-        raise HTTPException(status_code=400, detail="Gmail not connected.")
-    try:
-        embed_and_store_emails(user_id=str(current_user.id), gmail_token=current_user.gmail_token)
-        return {"message": "Embeddings stored successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/search-emails")
-def search_emails_by_query(query: str, current_user=Depends(get_current_user_token)):
-    if not current_user.gmail_token:
-        raise HTTPException(status_code=400, detail="Gmail not connected.")
-    try:
-        matches = search_similar_emails(user_id=str(current_user.id), query=query)
-        formatted = [{
-            "summary": summarize_email(m.metadata["text"]),
-            "gmail_link": f"https://mail.google.com/mail/u/0/#inbox/{m.metadata['email_id']}"
-        } for m in matches]
-        return {"results": formatted}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

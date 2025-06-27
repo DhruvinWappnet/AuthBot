@@ -2,6 +2,7 @@
 
 from PyPDF2 import PdfReader
 from sentence_transformers import SentenceTransformer
+from io import BytesIO
 import numpy as np
 import torch
 import re
@@ -9,8 +10,6 @@ import re
 # Use efficient model
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-from PyPDF2 import PdfReader
-from io import BytesIO
 
 def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     reader = PdfReader(BytesIO(pdf_bytes))

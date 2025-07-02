@@ -169,15 +169,41 @@ def chatbot_page():
         st.info("📊 Token Usage")
         try:
             r = httpx.get(f"{API_BASE_URL}/analytics/usage",
-                          headers={"Authorization": f"Bearer {st.session_state.token}"})
+                        headers={"Authorization": f"Bearer {st.session_state.token}"})
             if r.status_code == 200:
                 usage = r.json()
                 if usage:
                     df = pd.DataFrame(usage)
                     df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+                    # 💡 Show token usage chart
                     st.line_chart(df.set_index("timestamp")[["total_tokens"]])
+
+                    # 🕒 Duration chart
+                    st.line_chart(df.set_index("timestamp")[["groq_duration", "api_duration"]])
+
+                    # 💰 Summary
+                    total_cost = df["cost"].sum()
+                    st.metric("💰 Total Cost", f"${total_cost:.6f}")
+
+                    # 📦 Group by model
+                    model_summary = df.groupby("model").agg({
+                        "total_tokens": "sum",
+                        "cost": "sum"
+                    }).reset_index()
+                    st.markdown("### 📦 Model-wise Usage")
+                    st.dataframe(model_summary.rename(columns={
+                        "model": "Model",
+                        "total_tokens": "Total Tokens",
+                        "cost": "Total Cost ($)"
+                    }))
+
+                    # 📋 Full log with durations
                     with st.expander("📋 Full Log"):
-                        st.dataframe(df[["timestamp", "total_tokens", "message"]])
+                        st.dataframe(df[[
+                            "timestamp", "model", "total_tokens", "cost",
+                            "groq_duration", "api_duration", "message"
+                        ]])
                 else:
                     st.info("No usage yet.")
             else:

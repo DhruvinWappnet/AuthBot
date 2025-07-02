@@ -4,6 +4,7 @@ from app.core.auth import get_current_user_token
 from app.db.database import get_db
 
 router = APIRouter()
+
 @router.get("/usage")
 def get_usage_data(current_user=Depends(get_current_user_token), db: Session = Depends(get_db)):
     from app.models.token_usage import TokenUsage
@@ -16,5 +17,9 @@ def get_usage_data(current_user=Depends(get_current_user_token), db: Session = D
     return [{
         "timestamp": u.timestamp.isoformat(),
         "total_tokens": u.total_tokens,
-        "message": u.message
+        "message": u.message,
+        "model": u.model,
+        "cost": u.cost,
+        "groq_duration": u.groq_duration,    # ✅ Added
+        "api_duration": u.api_duration       # ✅ Added
     } for u in usage]

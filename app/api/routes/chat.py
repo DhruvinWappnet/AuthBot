@@ -1,4 +1,5 @@
 # app/api/routes/chat.py
+import time
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from requests import Session
@@ -20,85 +21,19 @@ class ChatRequest(BaseModel):
     question: str
     session_id: str  # required to identify conversation
 
-# @router.post("/query")
-# def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
-#     # Save user message
-#     user_msg = MessageCreate(
-#         sender="user",
-#         content=request.question,
-#         session_id=request.session_id
-#     )
-#     save_message(db, user_msg)
-
-#     # Generate response
-#     answer = get_groq_response(request.question)
-
-#     # Save bot response
-#     bot_msg = MessageCreate(
-#         sender="bot",
-#         content=answer,
-#         session_id=request.session_id
-#     )
-#     save_message(db, bot_msg)
-
-#     return {"answer": answer}
-
-# # app/api/routes/chat.py
-
-# @router.post("/pdf-query")
-# async def chat_with_pdf(file: UploadFile = File(...), question: str = ""):
-#     content = await file.read()
-#     text = extract_text_from_pdf(content)
-#     chunks = chunk_text(text)
-#     top_chunks = get_top_k_chunks(chunks, question)
-#     context = "\n".join(top_chunks)
-
-#     prompt = f"Answer the following question using ONLY the context below:\n\n{context}\n\nQuestion: {question}\nAnswer:"
-#     answer = get_groq_response(prompt)
-#     return {"answer": answer}
-
-#=================PREVIOUS WORKING=======================================#
-# @router.post("/query")
-# def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
-#     # Block if someone mistakenly uses pdf session here
-#     if request.session_id.startswith("pdf_"):
-#         raise HTTPException(status_code=400, detail="This is a PDF chat session. Use /pdf-query instead.")
-
-#     # Save user message
-#     user_msg = MessageCreate(
-#         sender="user",
-#         content=request.question,
-#         session_id=request.session_id
-#     )
-#     save_message(db, user_msg)
-
-#     # Generate general response
-#     answer = get_groq_response(request.question)
-
-#     # Save bot response
-#     bot_msg = MessageCreate(
-#         sender="bot",
-#         content=answer,
-#         session_id=request.session_id
-#     )
-#     save_message(db, bot_msg)
-
-#     return {"answer": answer}
-
-#========================================================================#
-
-#============UPDATION=================#
 
 @router.post("/query")
 def chat_endpoint(
     request: ChatRequest,
     db: Session = Depends(get_db),
-    current_user = Depends(get_current_user_token)  # ✅ Get user email
+    current_user = Depends(get_current_user_token)
 ):
     if request.session_id.startswith("pdf_"):
         raise HTTPException(status_code=400, detail="This is a PDF chat session. Use /pdf-query instead.")
+    
+    api_start = time.time()
 
-    # ✅ Save user message
+    # Save user message
     user_msg = MessageCreate(
         sender="user",
         content=request.question,
@@ -106,10 +41,12 @@ def chat_endpoint(
     )
     save_message(db, user_msg)
 
-    # ✅ Get answer + token usage
+    # Get answer from Groq
+    groq_start = time.time()
     answer, token_usage = get_groq_response(request.question)
+    groq_duration = time.time() - groq_start
 
-    # ✅ Save bot response
+    # Save bot message
     bot_msg = MessageCreate(
         sender="bot",
         content=answer,
@@ -117,7 +54,12 @@ def chat_endpoint(
     )
     save_message(db, bot_msg)
 
-    # ✅ Log token usage in DB
+    model_used = token_usage.get("model", "unknown") if token_usage else "unknown"
+    cost = token_usage.get("cost", 0.0) if token_usage else 0.0
+
+    api_duration = time.time() - api_start  # ✅ must happen before using it
+
+    # Save token usage
     if token_usage:
         usage_record = TokenUsage(
             user_email=current_user.email,
@@ -125,37 +67,23 @@ def chat_endpoint(
             prompt_tokens=token_usage["prompt_tokens"],
             completion_tokens=token_usage["completion_tokens"],
             total_tokens=token_usage["total_tokens"],
-            message=request.question
+            message=request.question,
+            model=model_used,
+            cost=cost,
+            groq_duration=round(groq_duration, 4),
+            api_duration=round(api_duration, 4),
         )
         db.add(usage_record)
         db.commit()
 
     return {
         "answer": answer,
-        "token_usage": token_usage
+        "token_usage": token_usage,
+        "groq_duration": round(groq_duration, 4),
+        "api_duration": round(api_duration, 4),
+        "model": model_used,
+        "cost": round(cost, 6),
     }
-#==================PREVIOUS WORKING=======================#
-
-# @router.post("/pdf-query")
-# async def chat_with_pdf(file: UploadFile = File(...), question: str = Form(...)):
-#     # Read and extract text
-#     content = await file.read()
-#     text = extract_text_from_pdf(content)
-
-#     if not question.strip():
-#         return {"answer": "Please provide a question to answer from the PDF."}
-
-#     # Chunk and filter by relevance
-#     chunks = chunk_text(text)
-#     top_chunks = get_top_k_chunks(chunks, question)
-#     context = "\n".join(top_chunks)
-
-#     # Generate response using only context
-#     prompt = f"""Answer the following question using ONLY the context below:\n\n{context}\n\nQuestion: {question}\nAnswer:"""
-#     answer = get_groq_response(prompt)
-
-#     return {"answer": answer}
-#========================================================
 
 #==================UPDATED=====================
 @router.post("/pdf-query")
@@ -223,7 +151,6 @@ async def chat_with_pdf(
 
 
 # =======================================
-router = APIRouter()
 model = SentenceTransformer("aspire/acge_text_embedding")
 
 @router.post("/query-email")

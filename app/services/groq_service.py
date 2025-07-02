@@ -23,7 +23,6 @@ client = Groq(api_key=settings.groq_api_key)
 #         return f"Error: {str(e)}"
 
 #==================UPDATION=================#
-
 def get_groq_response(prompt: str):
     try:
         completion = client.chat.completions.create(
@@ -38,10 +37,29 @@ def get_groq_response(prompt: str):
 
         response = completion.choices[0].message.content
 
+        # 🧠 Extract model + token usage
+        model_name = completion.model
+        usage = completion.usage
+        prompt_tokens = usage.prompt_tokens
+        completion_tokens = usage.completion_tokens
+        total_tokens = usage.total_tokens
+
+        # 💰 Pricing constants (based on Groq's July 2025 pricing)
+        prompt_cost_per_token = 0.00011       # Input
+        completion_cost_per_token = 0.0003448 # Output
+
+        # 🧮 Calculate cost
+        cost = (
+            prompt_tokens * prompt_cost_per_token +
+            completion_tokens * completion_cost_per_token
+        )
+
         token_usage = {
-            "prompt_tokens": completion.usage.prompt_tokens,
-            "completion_tokens": completion.usage.completion_tokens,
-            "total_tokens": completion.usage.total_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "model": model_name,
+            "cost": round(cost, 6)
         }
 
         return response.strip(), token_usage
